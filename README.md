@@ -50,7 +50,7 @@ class Article extends Model
     protected $translatable = ['title', 'slug', 'content', 'description'];
     
     // ✅ The model automatically follows app()->getLocale() (site locale)!
-    // ⚠️ translationLocale property is IGNORED - don't use it!
+    // ❌ Don't use $translationLocale - it's deprecated and ignored!
 }
 ```
 
@@ -106,8 +106,6 @@ echo $article->title; // "عنوان المقال" ✅
 $article->setLocale('ar');
 echo $article->title; // "عنوان المقال" ✅
 
-// Model always follows app()->getLocale() automatically!
-// Even if you set translationLocale, it's only used as fallback
 
 // Query
 $articles = Article::whereTranslationLike('title', 'Laravel')->get();
@@ -135,20 +133,26 @@ app()->setLocale('ar');
 echo $article->title; // "عنوان المقال" ✅
 ```
 
-**Option 2: translationLocale property (IGNORED - model always follows site locale!)**
+**Option 2: translationLocale property (Deprecated - DON'T USE!)**
 ```php
-// In Model
-protected $translationLocale = 'ar'; // ⚠️ This property is IGNORED!
+// ⚠️ DON'T USE THIS! This property is deprecated and ignored.
+// The model ALWAYS follows app()->getLocale() automatically.
+// ❌ Don't use: protected $translationLocale = '...'; 
 
-// Usage - ALWAYS follows app locale, regardless of translationLocale!
+// Just remove it - the model will work perfectly without it:
+class Article extends Model
+{
+    use IsTranslatable;
+    protected $translatable = ['title', 'slug', 'content'];
+    // No translationLocale needed! ✅ The model follows app()->getLocale() automatically!
+}
+
+// Usage - ALWAYS follows app locale automatically!
 app()->setLocale('en');
 echo $article->title; // "Article Title" ✅ (follows site locale!)
 
 app()->setLocale('ar');
 echo $article->title; // "عنوان المقال" ✅ (follows site locale!)
-
-// Even if you set translationLocale, it's completely ignored!
-// The model ALWAYS follows app()->getLocale() (site locale)
 ```
 
 **Option 3: Dynamic per instance**
@@ -162,9 +166,11 @@ echo $article->title; // "Article Title" ✅
 
 **Priority order:** `setLocale()` > `app()->getLocale()` (site locale) **ALWAYS!**
 
-**Important:** The model **ALWAYS follows the site locale** (`app()->getLocale()`) automatically! The `translationLocale` property is **IGNORED** - setting it has no effect. The model will always use the current site locale.
-
-**Important:** The model **always follows the site locale** (`app()->getLocale()`) first! The `translationLocale` property is only used as a fallback if the site locale is not supported.
+**Important:** 
+- ✅ The model **ALWAYS follows the site locale** (`app()->getLocale()`) automatically!
+- ❌ **Don't use `$translationLocale` property** - it's deprecated and completely ignored!
+- ✅ Just set the locale in your middleware/controller: `app()->setLocale('ar')` or `app()->setLocale('en')`
+- ✅ The model will automatically use the current site locale - no configuration needed!
 
 ### Saving Translations
 
