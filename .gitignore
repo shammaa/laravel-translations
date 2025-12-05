@@ -1,0 +1,25 @@
+/vendor/
+/node_modules/
+/.idea/
+/.vscode/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.phpunit.result.cache
+/.phpunit.cache/
+coverage/
+
+# Don't commit documentation MD files (except README and LICENSE)
+*.md
+!README.md
+!LICENSE
+
+# Local documentation files (not for GitHub)
+EXAMPLES.md
+FEATURES.md
+PERFORMANCE.md
+PERFORMANCE_COMPARISON.md
+USAGE_COMPLETE.md
+SQL_EXAMPLES.md
+
