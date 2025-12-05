@@ -3,7 +3,7 @@
     "description": "Professional, high-performance multilingual translation system for Laravel with optimized database views and advanced features",
     "type": "library",
     "license": "MIT",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "authors": [
         {
             "name": "Shadi Shammaa",
