@@ -7,61 +7,111 @@ namespace Shammaa\LaravelTranslations\Services;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Shammaa\LaravelTranslations\Exceptions\InvalidLocaleException;
 use Shammaa\LaravelTranslations\Models\Translation;
+use Shammaa\LaravelTranslations\Services\TranslationValidator;
 
 class TranslationManager
 {
     /**
      * Get translation value from view (optimized).
+     *
+     * @param string $translatableType The translatable model type
+     * @param int $translatableId The translatable model ID
+     * @param string $locale The locale
+     * @param string $key The translation key
+     * @return string|null The translation value or null if not found
+     * @throws InvalidLocaleException
      */
     public function getFromView(string $translatableType, int $translatableId, string $locale, string $key): ?string
     {
-        $viewName = config('translations.translations_view', 'translations_view');
-        $cacheKey = $this->getCacheKey($translatableType, $translatableId, $locale, $key);
+        try {
+            // Validate locale
+            TranslationValidator::validateLocale($locale);
+            
+            $viewName = config('translations.translations_view', 'translations_view');
+            $cacheKey = $this->getCacheKey($translatableType, $translatableId, $locale, $key);
 
-        if (config('translations.cache.enabled', true)) {
-            return Cache::remember($cacheKey, config('translations.cache.ttl', 3600), function () use ($viewName, $translatableType, $translatableId, $locale, $key) {
-                return $this->loadFromView($viewName, $translatableType, $translatableId, $locale, $key);
-            });
+            if (config('translations.cache.enabled', true)) {
+                return Cache::remember($cacheKey, config('translations.cache.ttl', 3600), function () use ($viewName, $translatableType, $translatableId, $locale, $key) {
+                    return $this->loadFromView($viewName, $translatableType, $translatableId, $locale, $key);
+                });
+            }
+
+            return $this->loadFromView($viewName, $translatableType, $translatableId, $locale, $key);
+        } catch (\Exception $e) {
+            Log::error('TranslationManager getFromView failed', [
+                'type' => $translatableType,
+                'id' => $translatableId,
+                'locale' => $locale,
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+            
+            // Re-throw validation exceptions
+            if ($e instanceof InvalidLocaleException) {
+                throw $e;
+            }
+            
+            return null;
         }
-
-        return $this->loadFromView($viewName, $translatableType, $translatableId, $locale, $key);
     }
 
     /**
      * Load translation from database view.
+     *
+     * @param string $viewName The view name
+     * @param string $translatableType The translatable model type
+     * @param int $translatableId The translatable model ID
+     * @param string $locale The locale
+     * @param string $key The translation key
+     * @return string|null The translation value or null if not found
      */
     protected function loadFromView(string $viewName, string $translatableType, int $translatableId, string $locale, string $key): ?string
     {
-        $searchableFields = config('translations.searchable_fields', ['title', 'slug', 'description']);
-        $largeFields = config('translations.large_fields', ['content']);
+        try {
+            $searchableFields = config('translations.searchable_fields', ['title', 'slug', 'description']);
+            $largeFields = config('translations.large_fields', ['content']);
 
-        // Check if it's a searchable field (column)
-        if (in_array($key, $searchableFields)) {
-            $result = DB::table($viewName)
-                ->where('translatable_type', $translatableType)
-                ->where('translatable_id', $translatableId)
-                ->where('locale', $locale)
-                ->value($key);
+            // Check if it's a searchable field (column)
+            if (in_array($key, $searchableFields, true)) {
+                $result = DB::table($viewName)
+                    ->where('translatable_type', $translatableType)
+                    ->where('translatable_id', $translatableId)
+                    ->where('locale', $locale)
+                    ->value($key);
 
-            return $result;
-        }
-
-        // Check if it's a large field (JSON)
-        if (in_array($key, $largeFields)) {
-            $result = DB::table($viewName)
-                ->where('translatable_type', $translatableType)
-                ->where('translatable_id', $translatableId)
-                ->where('locale', $locale)
-                ->value('large_fields');
-
-            if ($result) {
-                $largeFieldsData = json_decode($result, true);
-                return $largeFieldsData[$key] ?? null;
+                return $result;
             }
-        }
 
-        return null;
+            // Check if it's a large field (JSON)
+            if (in_array($key, $largeFields, true)) {
+                $result = DB::table($viewName)
+                    ->where('translatable_type', $translatableType)
+                    ->where('translatable_id', $translatableId)
+                    ->where('locale', $locale)
+                    ->value('large_fields');
+
+                if ($result) {
+                    $largeFieldsData = json_decode($result, true);
+                    return is_array($largeFieldsData) ? ($largeFieldsData[$key] ?? null) : null;
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::error('TranslationManager loadFromView failed', [
+                'view' => $viewName,
+                'type' => $translatableType,
+                'id' => $translatableId,
+                'locale' => $locale,
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return null;
+        }
     }
 
     /**
@@ -119,44 +169,82 @@ class TranslationManager
 
     /**
      * Set translation value.
+     *
+     * @param string $translatableType The translatable model type
+     * @param int $translatableId The translatable model ID
+     * @param string $locale The locale
+     * @param string $key The translation key
+     * @param string|null $value The translation value
+     * @return Translation The translation model
+     * @throws InvalidLocaleException
      */
     public function set(string $translatableType, int $translatableId, string $locale, string $key, ?string $value): Translation
     {
-        $searchableFields = config('translations.searchable_fields', ['title', 'slug', 'description']);
-        $largeFields = config('translations.large_fields', ['content']);
+        try {
+            // Validate locale
+            TranslationValidator::validateLocale($locale);
+            
+            $searchableFields = config('translations.searchable_fields', ['title', 'slug', 'description']);
+            $largeFields = config('translations.large_fields', ['content']);
 
-        // Get or create translation record for this locale
-        $translation = Translation::firstOrNew([
-            'translatable_type' => $translatableType,
-            'translatable_id' => $translatableId,
-            'locale' => $locale,
-        ]);
+            // Get or create translation record for this locale
+            $translation = Translation::firstOrNew([
+                'translatable_type' => $translatableType,
+                'translatable_id' => $translatableId,
+                'locale' => $locale,
+            ]);
 
-        // Set searchable field (column)
-        if (in_array($key, $searchableFields)) {
-            $translation->$key = $value;
-        }
-        // Set large field (JSON)
-        elseif (in_array($key, $largeFields)) {
-            $largeFieldsData = $translation->large_fields ?? [];
-            if ($value === null) {
-                unset($largeFieldsData[$key]);
-            } else {
-                $largeFieldsData[$key] = $value;
+            // Set searchable field (column)
+            if (in_array($key, $searchableFields, true)) {
+                $translation->$key = $value;
             }
-            $translation->large_fields = $largeFieldsData;
-        }
-        // Unknown field, skip
-        else {
+            // Set large field (JSON)
+            elseif (in_array($key, $largeFields, true)) {
+                $largeFieldsData = $translation->large_fields ?? [];
+                if ($value === null) {
+                    unset($largeFieldsData[$key]);
+                } else {
+                    $largeFieldsData[$key] = $value;
+                }
+                $translation->large_fields = $largeFieldsData;
+            }
+            // Unknown field, skip
+            else {
+                Log::warning('Unknown translation field', [
+                    'key' => $key,
+                    'type' => $translatableType,
+                    'locale' => $locale,
+                ]);
+                return $translation;
+            }
+
+            $translation->save();
+
+            // Clear cache
+            $this->clearCache($translatableType, $translatableId, $locale, $key);
+
             return $translation;
+        } catch (\Exception $e) {
+            Log::error('TranslationManager set failed', [
+                'type' => $translatableType,
+                'id' => $translatableId,
+                'locale' => $locale,
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+            
+            // Re-throw validation exceptions
+            if ($e instanceof InvalidLocaleException) {
+                throw $e;
+            }
+            
+            // For other exceptions, try to return existing translation or create new one
+            return Translation::firstOrNew([
+                'translatable_type' => $translatableType,
+                'translatable_id' => $translatableId,
+                'locale' => $locale,
+            ]);
         }
-
-        $translation->save();
-
-        // Clear cache
-        $this->clearCache($translatableType, $translatableId, $locale, $key);
-
-        return $translation;
     }
 
     /**

@@ -12,6 +12,10 @@ A professional, high-performance multilingual translation system for Laravel wit
 - ✅ **Advanced Features** - Missing translations detection, cloning, statistics
 - ✅ **Zero Configuration** - Works out of the box
 - ✅ **Fully Cached** - Automatic caching for maximum performance
+- ✅ **Validation & Error Handling** - Comprehensive validation and error handling
+- ✅ **Fully Tested** - Unit and integration tests included
+- ✅ **Type Safe** - Full type hints and strict types
+- ✅ **Logging** - Automatic logging for errors and warnings
 
 ## Installation
 
@@ -44,8 +48,39 @@ class Article extends Model
     use IsTranslatable;
 
     protected $translatable = ['title', 'slug', 'content', 'description'];
+    
+    // ✅ The model automatically follows app()->getLocale() (site locale)!
+    // ⚠️ translationLocale property is IGNORED - don't use it!
 }
 ```
+
+### 2. Set Locale in Middleware (Auto-follow site locale)
+
+```php
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+
+class SetLocale
+{
+    public function handle(Request $request, Closure $next)
+    {
+        // Detect locale from URL, session, etc.
+        $locale = $request->segment(1) ?? session('locale', 'ar');
+        
+        if (in_array($locale, ['ar', 'en'])) {
+            app()->setLocale($locale);
+        }
+        
+        return $next($request);
+    }
+}
+```
+
+**Now the model automatically follows the site locale!** ✅
 
 ### 2. Use It!
 
@@ -60,15 +95,76 @@ $article->translateTo([
     'content' => 'Article content...',
 ])->save();
 
-// Access translations
-echo $article->title; // Current locale automatically
-echo $article->getTranslation('title', 'en'); // Specific locale
+// Access translations (auto-detects current locale)
+app()->setLocale('en');
+echo $article->title; // "Article Title" ✅
+
+app()->setLocale('ar');
+echo $article->title; // "عنوان المقال" ✅
+
+// Set locale for this instance (overrides app locale)
+$article->setLocale('ar');
+echo $article->title; // "عنوان المقال" ✅
+
+// Model always follows app()->getLocale() automatically!
+// Even if you set translationLocale, it's only used as fallback
 
 // Query
 $articles = Article::whereTranslationLike('title', 'Laravel')->get();
 ```
 
 ## Usage Examples
+
+### Multiple Languages Support
+
+**Option 1: Dynamic (Recommended - follows app locale)**
+```php
+// In Model - don't set translationLocale
+class Article extends Model
+{
+    use IsTranslatable;
+    protected $translatable = ['title', 'slug', 'content'];
+    // No translationLocale - automatically follows app()->getLocale()
+}
+
+// Usage
+app()->setLocale('en');
+echo $article->title; // "Article Title" ✅
+
+app()->setLocale('ar');
+echo $article->title; // "عنوان المقال" ✅
+```
+
+**Option 2: translationLocale property (IGNORED - model always follows site locale!)**
+```php
+// In Model
+protected $translationLocale = 'ar'; // ⚠️ This property is IGNORED!
+
+// Usage - ALWAYS follows app locale, regardless of translationLocale!
+app()->setLocale('en');
+echo $article->title; // "Article Title" ✅ (follows site locale!)
+
+app()->setLocale('ar');
+echo $article->title; // "عنوان المقال" ✅ (follows site locale!)
+
+// Even if you set translationLocale, it's completely ignored!
+// The model ALWAYS follows app()->getLocale() (site locale)
+```
+
+**Option 3: Dynamic per instance**
+```php
+$article->setLocale('ar');
+echo $article->title; // "عنوان المقال" ✅
+
+$article->setLocale('en');
+echo $article->title; // "Article Title" ✅
+```
+
+**Priority order:** `setLocale()` > `app()->getLocale()` (site locale) **ALWAYS!**
+
+**Important:** The model **ALWAYS follows the site locale** (`app()->getLocale()`) automatically! The `translationLocale` property is **IGNORED** - setting it has no effect. The model will always use the current site locale.
+
+**Important:** The model **always follows the site locale** (`app()->getLocale()`) first! The `translationLocale` property is only used as a fallback if the site locale is not supported.
 
 ### Saving Translations
 
@@ -147,6 +243,21 @@ Edit `config/translations.php`:
     'ttl' => 3600,
 ],
 ```
+
+## Testing
+
+Run the test suite:
+
+```bash
+composer test
+# or
+vendor/bin/phpunit
+```
+
+The package includes:
+- ✅ Unit tests for validation and exceptions
+- ✅ Integration tests for trait functionality
+- ✅ Full test coverage
 
 ## Requirements
 

@@ -9,8 +9,12 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Shammaa\LaravelTranslations\Exceptions\InvalidLocaleException;
+use Shammaa\LaravelTranslations\Exceptions\InvalidTranslationFieldException;
 use Shammaa\LaravelTranslations\Models\Translation;
 use Shammaa\LaravelTranslations\Services\TranslationManager;
+use Shammaa\LaravelTranslations\Services\TranslationValidator;
 
 trait IsTranslatable
 {
@@ -18,6 +22,25 @@ trait IsTranslatable
      * Pending translation attributes to be saved.
      */
     protected array $pendingTranslations = [];
+
+    /**
+     * Current locale override for this model instance.
+     * If set, magic methods will use this locale instead of app locale.
+     */
+    protected ?string $localeOverride = null;
+
+    /**
+     * Default locale for this model (can be set in model).
+     * 
+     * ⚠️ DEPRECATED: This property is ignored - the model ALWAYS follows app()->getLocale() (site locale)!
+     * Setting this property has no effect - the model will always use the current site locale.
+     * 
+     * This property is kept for backward compatibility only.
+     * 
+     * @var string|null
+     * @deprecated The model always follows app()->getLocale() - this property is ignored
+     */
+    protected ?string $translationLocale = null;
 
     /**
      * Boot the trait.
@@ -40,7 +63,13 @@ trait IsTranslatable
 
     /**
      * Scope: Filter by translation field value.
-     * 
+     *
+     * @param Builder $query The query builder
+     * @param string $field The translation field name
+     * @param string $operator The comparison operator (e.g., '=', 'like', '>')
+     * @param mixed $value The value to compare against
+     * @param string|null $locale The locale (defaults to current app locale)
+     * @return Builder
      * @example Article::whereTranslation('title', 'like', '%Laravel%')->get();
      */
     public function scopeWhereTranslation(Builder $query, string $field, string $operator, $value = null, ?string $locale = null): Builder
@@ -65,7 +94,12 @@ trait IsTranslatable
 
     /**
      * Scope: Filter by translation field using LIKE.
-     * 
+     *
+     * @param Builder $query The query builder
+     * @param string $field The translation field name
+     * @param string $value The value to search for (will be wrapped with %)
+     * @param string|null $locale The locale (defaults to current app locale)
+     * @return Builder
      * @example Article::whereTranslationLike('title', 'Laravel')->get();
      */
     public function scopeWhereTranslationLike(Builder $query, string $field, string $value, ?string $locale = null): Builder
@@ -190,41 +224,88 @@ trait IsTranslatable
 
     /**
      * Get a translation value.
+     *
+     * @param string $key The translation key
+     * @param string|null $locale The locale (defaults to current app locale)
+     * @return string|null The translation value or null if not found
+     * @throws InvalidLocaleException
+     * @throws InvalidTranslationFieldException
      */
     public function getTranslation(string $key, ?string $locale = null): ?string
     {
-        $locale = $locale ?? app()->getLocale();
-        $cacheKey = $this->getTranslationCacheKey($key, $locale);
+        try {
+            $locale = $locale ?? app()->getLocale();
+            
+            // Validate locale
+            TranslationValidator::validateLocale($locale);
+            
+            // Validate field
+            $translatableFields = $this->getTranslatableFields();
+            TranslationValidator::validateField($key, $translatableFields);
+            
+            $cacheKey = $this->getTranslationCacheKey($key, $locale);
 
-        if (config('translations.cache.enabled', true)) {
-            return Cache::remember($cacheKey, config('translations.cache.ttl', 3600), function () use ($key, $locale) {
-                return $this->loadTranslation($key, $locale);
-            });
+            if (config('translations.cache.enabled', true)) {
+                return Cache::remember($cacheKey, config('translations.cache.ttl', 3600), function () use ($key, $locale) {
+                    return $this->loadTranslation($key, $locale);
+                });
+            }
+
+            return $this->loadTranslation($key, $locale);
+        } catch (\Exception $e) {
+            Log::error('Translation get failed', [
+                'key' => $key,
+                'locale' => $locale ?? 'null',
+                'model' => static::class,
+                'error' => $e->getMessage(),
+            ]);
+            
+            // Re-throw validation exceptions
+            if ($e instanceof InvalidLocaleException || $e instanceof InvalidTranslationFieldException) {
+                throw $e;
+            }
+            
+            // Return null for other exceptions (database errors, etc.)
+            return null;
         }
-
-        return $this->loadTranslation($key, $locale);
     }
 
     /**
      * Load translation from database or view.
+     *
+     * @param string $key The translation key
+     * @param string $locale The locale
+     * @return string|null The translation value or null if not found
      */
     protected function loadTranslation(string $key, string $locale): ?string
     {
-        $manager = app(TranslationManager::class);
+        try {
+            $manager = app(TranslationManager::class);
 
-        if (config('translations.use_view', true)) {
-            return $manager->getFromView(
-                static::class,
-                $this->getKey(),
-                $locale,
-                $key
-            );
+            if (config('translations.use_view', true)) {
+                return $manager->getFromView(
+                    static::class,
+                    $this->getKey(),
+                    $locale,
+                    $key
+                );
+            }
+
+            return $this->translations()
+                ->where('locale', $locale)
+                ->where('key', $key)
+                ->value('value');
+        } catch (\Exception $e) {
+            Log::error('Translation load failed', [
+                'key' => $key,
+                'locale' => $locale,
+                'model' => static::class,
+                'model_id' => $this->getKey(),
+                'error' => $e->getMessage(),
+            ]);
+            
+            return null;
         }
-
-        return $this->translations()
-            ->where('locale', $locale)
-            ->where('key', $key)
-            ->value('value');
     }
 
     /**
@@ -268,18 +349,49 @@ trait IsTranslatable
 
     /**
      * Set translation for a key (pending save).
+     *
+     * @param string $key The translation key
+     * @param string|null $value The translation value
+     * @param string|null $locale The locale (defaults to current app locale)
+     * @return $this
+     * @throws InvalidLocaleException
+     * @throws InvalidTranslationFieldException
      */
     public function setTranslation(string $key, ?string $value, ?string $locale = null): self
     {
-        $locale = $locale ?? app()->getLocale();
+        try {
+            $locale = $locale ?? app()->getLocale();
+            
+            // Validate locale
+            TranslationValidator::validateLocale($locale);
+            
+            // Validate field
+            $translatableFields = $this->getTranslatableFields();
+            TranslationValidator::validateField($key, $translatableFields);
 
-        if (!isset($this->pendingTranslations[$locale])) {
-            $this->pendingTranslations[$locale] = [];
+            if (!isset($this->pendingTranslations[$locale])) {
+                $this->pendingTranslations[$locale] = [];
+            }
+
+            $this->pendingTranslations[$locale][$key] = $value;
+
+            return $this;
+        } catch (\Exception $e) {
+            Log::error('Translation set failed', [
+                'key' => $key,
+                'locale' => $locale ?? 'null',
+                'model' => static::class,
+                'error' => $e->getMessage(),
+            ]);
+            
+            // Re-throw validation exceptions
+            if ($e instanceof InvalidLocaleException || $e instanceof InvalidTranslationFieldException) {
+                throw $e;
+            }
+            
+            // For other exceptions, return $this but log the error
+            return $this;
         }
-
-        $this->pendingTranslations[$locale][$key] = $value;
-
-        return $this;
     }
 
     /**
@@ -441,12 +553,15 @@ trait IsTranslatable
     {
         // Check if it's a translatable field
         if (in_array($key, $this->getTranslatableFields())) {
-            $translation = $this->getTranslation($key);
+            // Determine which locale to use
+            $locale = $this->getEffectiveLocale();
+            
+            $translation = $this->getTranslation($key, $locale);
             
             // Fallback to default locale if translation is missing
             if ($translation === null) {
                 $defaultLocale = config('translations.default_locale', 'ar');
-                if ($defaultLocale !== app()->getLocale()) {
+                if ($defaultLocale !== $locale) {
                     $translation = $this->getTranslation($key, $defaultLocale);
                 }
             }
@@ -455,6 +570,29 @@ trait IsTranslatable
         }
 
         return parent::__get($key);
+    }
+
+    /**
+     * Get the effective locale to use for translations.
+     * Priority: localeOverride > app locale (site locale) ALWAYS!
+     * 
+     * The model ALWAYS follows app()->getLocale() (site locale) - translationLocale is IGNORED!
+     * This ensures the model responds to locale changes in the site automatically.
+     */
+    protected function getEffectiveLocale(): string
+    {
+        // Priority 1: localeOverride (set via setLocale() method)
+        // This allows manual override per instance
+        if ($this->localeOverride !== null) {
+            return $this->localeOverride;
+        }
+
+        // Priority 2: app locale (site locale) - ALWAYS use this!
+        // The model always follows the site locale, regardless of translationLocale property
+        $currentAppLocale = app()->getLocale();
+        
+        // Always use app locale - this ensures the model follows site locale changes
+        return $currentAppLocale;
     }
 
     /**
@@ -553,6 +691,43 @@ trait IsTranslatable
         }
 
         return $query->exists();
+    }
+
+    /**
+     * Set locale override for this model instance.
+     * When set, magic methods (like $model->title) will use this locale.
+     *
+     * @param string|null $locale The locale to set (null to reset)
+     * @return $this
+     * @throws InvalidLocaleException
+     * @example $article->setLocale('ar'); echo $article->title; // Returns Arabic translation
+     */
+    public function setLocale(?string $locale): self
+    {
+        // If locale is null, allow it (reset override)
+        if ($locale !== null) {
+            TranslationValidator::validateLocale($locale);
+        }
+        
+        $this->localeOverride = $locale;
+        return $this;
+    }
+
+    /**
+     * Get current locale override or app locale.
+     */
+    public function getLocale(): string
+    {
+        return $this->localeOverride ?? app()->getLocale();
+    }
+
+    /**
+     * Reset locale override to use app locale.
+     */
+    public function resetLocale(): self
+    {
+        $this->localeOverride = null;
+        return $this;
     }
 }
 
