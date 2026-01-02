@@ -504,6 +504,19 @@ trait IsTranslatable
                 }
             }
 
+            // Skip locales where all translatable fields are empty
+            $hasContent = false;
+            foreach ($validTranslations as $value) {
+                if (!empty($value)) {
+                    $hasContent = true;
+                    break;
+                }
+            }
+
+            if (!$hasContent) {
+                continue; // Skip this locale entirely
+            }
+
             if (!empty($validTranslations)) {
                 $manager->bulkSet(
                     static::class,
