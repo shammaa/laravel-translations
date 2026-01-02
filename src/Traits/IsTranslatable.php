@@ -393,6 +393,14 @@ trait IsTranslatable
             return $this;
         }
     }
+    /**
+     * Get pending translation (for compatibility with other packages).
+     */
+    public function getPendingTranslation(string $key, string $locale): ?string
+    {
+        return $this->pendingTranslations[$locale][$key] ?? null;
+    }
+
 
     /**
      * Set multiple translations at once (pending save).
@@ -421,6 +429,27 @@ trait IsTranslatable
     {
         // If first parameter is array, it means no locale provided - use current locale automatically
         if (is_array($localeOrTranslations) && $translations === null) {
+            $data = $localeOrTranslations;
+            if (count($data) > 0) {
+                $firstKey = (string) key($data);
+                $firstValue = reset($data);
+
+                if (is_array($firstValue)) {
+                    // Determine if this is attribute-first: ['name' => ['ar' => '...', 'en' => '...']]
+                    if (in_array($firstKey, $this->getTranslatableFields())) {
+                        foreach ($data as $attribute => $locales) {
+                            if (is_array($locales)) {
+                                foreach ($locales as $locale => $value) {
+                                    $this->setTranslation($attribute, $value, $locale);
+                                }
+                            } else {
+                                $this->setTranslation($attribute, $locales, app()->getLocale());
+                            }
+                        }
+                        return $this;
+                    }
+                }
+            }
             return $this->setTranslations($localeOrTranslations, app()->getLocale());
         }
 
