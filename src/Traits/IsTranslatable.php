@@ -430,6 +430,17 @@ trait IsTranslatable
         // If first parameter is array, it means no locale provided - use current locale automatically
         if (is_array($localeOrTranslations) && $translations === null) {
             $data = $localeOrTranslations;
+
+            // Auto-decode JSON strings if they are passed as values
+            foreach ($data as $key => $value) {
+                if (is_string($value) && (str_starts_with($value, '{') || str_starts_with($value, '['))) {
+                    $decoded = json_decode($value, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $data[$key] = $decoded;
+                    }
+                }
+            }
+
             if (count($data) > 0) {
                 $firstKey = (string) key($data);
                 $firstValue = reset($data);
@@ -450,7 +461,7 @@ trait IsTranslatable
                     }
                 }
             }
-            return $this->setTranslations($localeOrTranslations, app()->getLocale());
+            return $this->setTranslations($data, app()->getLocale());
         }
 
         // Otherwise, first parameter is locale (backward compatibility)
